@@ -9,6 +9,37 @@
 
 #include <thread>
 #include <chrono>
+#include <mutex>
+//---------------------------------
+//	OSC
+//---------------------------------
+#include <string>
+#include "OscReceivedElements.h"
+#include "OscPacketListener.h"
+#include "OscOutboundPacketStream.h"
+#include "UdpSocket.h"
+#include "IpEndpointName.h"
+
+
+std::mutex mtx;
+
+void sendOSCMessage(int id, float x, float y, float z, float rx, float ry, float rz, float rw)
+{
+    // Set IPAddress and Port
+    const std::string ipAddress = "127.0.0.1";
+    const int port = 8000;
+
+    UdpTransmitSocket transmitSocket(IpEndpointName(ipAddress.c_str(), port));
+    //Buffer
+    char buffer[6144];
+    osc::OutboundPacketStream p(buffer, 6144);
+    p << osc::BeginBundleImmediate
+        //Head
+        << osc::BeginMessage("/position") << id << x << y << z << rx << ry << rz << rw << osc::EndMessage
+        << osc::EndBundle;
+    transmitSocket.Send(p.Data(), p.Size());
+}
+
 
 Antilatency::DeviceNetwork::NodeHandle getIdleTrackingNode(Antilatency::DeviceNetwork::INetwork network, Antilatency::Alt::Tracking::ITrackingCotaskConstructor altTrackingCotaskConstructor) {
     // Get all currently connected nodes, that supports alt tracking task.
@@ -29,6 +60,92 @@ Antilatency::DeviceNetwork::NodeHandle getIdleTrackingNode(Antilatency::DeviceNe
     return Antilatency::DeviceNetwork::NodeHandle::Null;
 }
 
+std::vector<Antilatency::DeviceNetwork::NodeHandle> getIdleTrackingNodes(Antilatency::DeviceNetwork::INetwork network, Antilatency::Alt::Tracking::ITrackingCotaskConstructor altTrackingCotaskConstructor) {
+    // Get all currently connected nodes, that supports alt tracking task.
+    std::vector<Antilatency::DeviceNetwork::NodeHandle> altNodes = altTrackingCotaskConstructor.findSupportedNodes(network);
+    std::vector< Antilatency::DeviceNetwork::NodeHandle> returnNodes;
+    if (altNodes.size() == 0) {
+        std::cout << "No nodes with Alt Tracking Task support found" << std::endl;
+        return returnNodes;
+    }
+
+    // Return first idle node.
+    for (auto node : altNodes) {
+        if (network.nodeGetStatus(node) == Antilatency::DeviceNetwork::NodeStatus::Idle) {
+            returnNodes.push_back(node);
+        }
+    }
+
+    std::cout << "Idle nodes with Alt Tracking Task support found: Count ----- " << returnNodes.size() << std::endl;
+    return returnNodes;
+}
+
+void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCotask, std::string tag, Antilatency::Math::floatP3Q placement) {
+    
+    if (altTrackingCotask != nullptr) {
+        while (altTrackingCotask != nullptr)
+        {
+            // Print the extrapolated state of node to the console every 500 ms (2FPS).
+            if (altTrackingCotask.isTaskFinished()) {
+                std::cout << "Tracking task finished" << std::endl;
+                return;
+            }
+
+            Antilatency::Alt::Tracking::State state = altTrackingCotask.getExtrapolatedState(placement, 0.03f);
+            // id
+            int id = std::stoi(tag);
+            // Pose
+            float posx = state.pose.position.x;
+            float posy = state.pose.position.y;
+            float posz = state.pose.position.z;
+            float rx = state.pose.rotation.x;
+            float ry = state.pose.position.y;
+            float rz = state.pose.rotation.z;
+            float rw = state.pose.rotation.w;
+
+
+            // -------------------------------------------------
+            // Info
+            // -------------------------------------------------
+            std::cout << "State: " << id << std::endl;
+            std::cout << "\tPose:" << std::endl;
+            std::cout << "\t\tPosition: x: " << posx << ", y: " << posy << ", z: " << posz << std::endl;
+            std::cout << "\t\tRotation: x: " << rx << ", y: " << ry << ", z: " << rz << ", w: " << rw << std::endl;
+
+            std::cout << "\tStability:" << std::endl;
+            std::cout << "\t\tStage: " << static_cast<int32_t>(state.stability.stage) << std::endl;
+            std::cout << "\t\tValue: " << state.stability.value << std::endl;
+            std::cout << "\tVelocity:" << state.velocity.x << ", y: " << state.velocity.y << ", z: " << state.velocity.z << std::endl;
+            std::cout << "\tLocalAngularVelocity: x:" << state.localAngularVelocity.x << ", y: " << state.localAngularVelocity.y << ", z: " << state.localAngularVelocity.z << std::endl << std::endl;
+            // -------------------------------------------------
+
+            // Send OSC
+            mtx.lock();
+            sendOSCMessage(id, posx, posy, posz, rx, ry, rz, rw);
+            mtx.unlock();
+            
+            // Wait
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(33));
+
+            
+        }
+    }
+    else {
+        std::cout << "Failed to start tracking task on node" << std::endl;
+    }
+    
+}
+
+
+
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------------------------
+// ------------------------------------------------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
     if(argc != 3){
         std::cout << "Wrong arguments. Pass environment data string as first argument and placement data as second.";
@@ -100,6 +217,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    
+
     // Each time the device network is changed due to connection or disconnection of a device that matches the device filter of the network,
     // or start or stop of a task on any network device, the network update id is incremented by 1. 
     uint32_t prevUpdateId = 0;
@@ -108,47 +227,38 @@ int main(int argc, char* argv[]) {
         // Check if the network has been changed.
         const uint32_t currentUpdateId = network.getUpdateId();
 
+        std::vector<std::thread> workers;
+
         if (prevUpdateId != currentUpdateId) {
             prevUpdateId = currentUpdateId;
             std::cout << "--- Device network changed, update id: " << currentUpdateId << " ---" << std::endl;
 
-            // Get first idle node that supports tracking task.
-            const Antilatency::DeviceNetwork::NodeHandle trackingNode = getIdleTrackingNode(network, altTrackingCotaskConstructor);
+            // Get all idle nodes that supports tracking task.
+            const std::vector<Antilatency::DeviceNetwork::NodeHandle> trackingNodes = getIdleTrackingNodes(network, altTrackingCotaskConstructor);
 
-            if (trackingNode != Antilatency::DeviceNetwork::NodeHandle::Null) {
-                // Start tracking task on node.
-                Antilatency::Alt::Tracking::ITrackingCotask altTrackingCotask = altTrackingCotaskConstructor.startTask(network, trackingNode, environment);
-                if (altTrackingCotask != nullptr) {
-                    while (altTrackingCotask != nullptr) {
-                        // Print the extrapolated state of node to the console every 500 ms (2FPS).
-                        if (altTrackingCotask.isTaskFinished()) {
-                            std::cout << "Tracking task finished" << std::endl;
-                            break;
-                        }
-                        
-                        Antilatency::Alt::Tracking::State state = altTrackingCotask.getExtrapolatedState(placement, 0.03f);
-
-                        std::cout << "State:" << std::endl;
-                        
-                        std::cout << "\tPose:" << std::endl;
-                        std::cout << "\t\tPosition: x: " << state.pose.position.x << ", y: " << state.pose.position.y << ", z: " << state.pose.position.z << std::endl;
-                        std::cout << "\t\tRotation: x: " << state.pose.rotation.x << ", y: " << state.pose.rotation.y << ", z: " << state.pose.rotation.z  << ", w: " << state.pose.rotation.w << std::endl;
-                        
-                        std::cout << "\tStability:" << std::endl;
-                        std::cout << "\t\tStage: " << static_cast<int32_t>(state.stability.stage) << std::endl;
-                        std::cout << "\t\tValue: " << state.stability.value << std::endl;
-                        
-                        std::cout << "\tVelocity:" << state.velocity.x << ", y: " << state.velocity.y << ", z: " << state.velocity.z << std::endl;
-
-                        std::cout << "\tLocalAngularVelocity: x:" << state.localAngularVelocity.x << ", y: " << state.localAngularVelocity.y << ", z: " << state.localAngularVelocity.z << std::endl << std::endl;
-                        
-                        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(500));
-                    }
-                } else {
-                    std::cout << "Failed to start tracking task on node" << std::endl;
+            
+            std::cout << trackingNodes.size() << std::endl;
+            for (auto trackingNode : trackingNodes) {
+                if (trackingNode != Antilatency::DeviceNetwork::NodeHandle::Null) {
+                    // Start tracking task on node.
+                    Antilatency::Alt::Tracking::ITrackingCotask altTrackingCotask = altTrackingCotaskConstructor.startTask(network, trackingNode, environment);
+                    
+                    // Tag
+                    std::string tag;
+                    tag = network.nodeGetStringProperty(trackingNode, "Tag");
+                    std::cout << tag << std::endl;
+                    workers.emplace_back(getTrackingInfo, altTrackingCotask, tag, placement);
                 }
             }
+
+            
         }
+
+        for (auto& worker : workers) {
+            worker.join();
+        }
+
+        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(30));
     }
     
     return 0;
