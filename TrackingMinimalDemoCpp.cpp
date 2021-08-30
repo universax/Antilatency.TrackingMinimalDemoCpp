@@ -69,7 +69,7 @@ std::vector<Antilatency::DeviceNetwork::NodeHandle> getIdleTrackingNodes(Antilat
         return returnNodes;
     }
 
-    // Return first idle node.
+    // Pushback all available node.
     for (auto node : altNodes) {
         if (network.nodeGetStatus(node) == Antilatency::DeviceNetwork::NodeStatus::Idle) {
             returnNodes.push_back(node);
@@ -81,11 +81,9 @@ std::vector<Antilatency::DeviceNetwork::NodeHandle> getIdleTrackingNodes(Antilat
 }
 
 void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCotask, std::string tag, Antilatency::Math::floatP3Q placement) {
-    
     if (altTrackingCotask != nullptr) {
         while (altTrackingCotask != nullptr)
         {
-            // Print the extrapolated state of node to the console every 500 ms (2FPS).
             if (altTrackingCotask.isTaskFinished()) {
                 std::cout << "Tracking task finished" << std::endl;
                 return;
@@ -126,14 +124,11 @@ void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCot
             
             // Wait
             std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(33));
-
-            
         }
     }
     else {
         std::cout << "Failed to start tracking task on node" << std::endl;
     }
-    
 }
 
 
@@ -246,7 +241,6 @@ int main(int argc, char* argv[]) {
                     // Tag
                     std::string tag;
                     tag = network.nodeGetStringProperty(trackingNode, "Tag");
-                    std::cout << tag << std::endl;
                     workers.emplace_back(getTrackingInfo, altTrackingCotask, tag, placement);
                 }
             }
