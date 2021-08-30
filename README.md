@@ -45,3 +45,8 @@ TrackingMinimalDemo executable expects environment code as first argument and pl
  * where <group_name> is the name of the group to which the user who launches the application belongs. For example, on Raspberry Pi this commands looks like:
  
  `echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="3237", MODE="0666", GROUP="pi"' | sudo tee /etc/udev/rules.d/66-antilatency.rules`
+
+
+## OSC
+You need to set search path and libs for oscpack.
+(https://note.com/prty/n/n4549edcef3e4)
