@@ -23,7 +23,7 @@
 
 std::mutex mtx;
 
-void sendOSCMessage(int id, float x, float y, float z, float rx, float ry, float rz, float rw)
+void sendOSCMessage(int id, float x, float y, float z, float rx, float ry, float rz, float rw, int state, float stability)
 {
     // Set IPAddress and Port
     const std::string ipAddress = "127.0.0.1";
@@ -35,7 +35,7 @@ void sendOSCMessage(int id, float x, float y, float z, float rx, float ry, float
     osc::OutboundPacketStream p(buffer, 6144);
     p << osc::BeginBundleImmediate
         //Head
-        << osc::BeginMessage("/position") << id << x << y << z << rx << ry << rz << rw << osc::EndMessage
+        << osc::BeginMessage("/position") << id << x << y << z << rx << ry << rz << rw << state << stability << osc::EndMessage
         << osc::EndBundle;
     transmitSocket.Send(p.Data(), p.Size());
 }
@@ -85,45 +85,48 @@ void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCot
         while (altTrackingCotask != nullptr)
         {
             if (altTrackingCotask.isTaskFinished()) {
-                std::cout << "Tracking task finished" << std::endl;
+                std::cout << "Tracking task finished: " << tag << std::endl;
                 return;
             }
 
             Antilatency::Alt::Tracking::State state = altTrackingCotask.getExtrapolatedState(placement, 0.03f);
-            // id
+            // id   
             int id = std::stoi(tag);
             // Pose
             float posx = state.pose.position.x;
             float posy = state.pose.position.y;
             float posz = state.pose.position.z;
             float rx = state.pose.rotation.x;
-            float ry = state.pose.position.y;
+            float ry = state.pose.rotation.y;
             float rz = state.pose.rotation.z;
             float rw = state.pose.rotation.w;
 
+            int curState = static_cast<int32_t>(state.stability.stage);
+            float stability = state.stability.value;
 
             // -------------------------------------------------
             // Info
             // -------------------------------------------------
-            std::cout << "State: " << id << std::endl;
-            std::cout << "\tPose:" << std::endl;
-            std::cout << "\t\tPosition: x: " << posx << ", y: " << posy << ", z: " << posz << std::endl;
-            std::cout << "\t\tRotation: x: " << rx << ", y: " << ry << ", z: " << rz << ", w: " << rw << std::endl;
-
-            std::cout << "\tStability:" << std::endl;
-            std::cout << "\t\tStage: " << static_cast<int32_t>(state.stability.stage) << std::endl;
-            std::cout << "\t\tValue: " << state.stability.value << std::endl;
-            std::cout << "\tVelocity:" << state.velocity.x << ", y: " << state.velocity.y << ", z: " << state.velocity.z << std::endl;
-            std::cout << "\tLocalAngularVelocity: x:" << state.localAngularVelocity.x << ", y: " << state.localAngularVelocity.y << ", z: " << state.localAngularVelocity.z << std::endl << std::endl;
+            //std::cout << "State: " << id << std::endl;
+            //std::cout << "\tPose:" << std::endl;
+            //std::cout << "\t\tPosition: x: " << posx << ", y: " << posy << ", z: " << posz << std::endl;
+            //std::cout << "\t\tRotation: x: " << rx << ", y: " << ry << ", z: " << rz << ", w: " << rw << std::endl;
+               
+            //std::cout << "\tStability:" << std::endl;
+            //std::cout << "\t\tStage: " << static_cast<int32_t>(state.stability.stage) << std::endl;
+            //std::cout << "\t\tValue: " << state.stability.value << std::endl;
+            //std::cout << "\tVelocity:" << state.velocity.x << ", y: " << state.velocity.y << ", z: " << state.velocity.z << std::endl;
+            //std::cout << "\tLocalAngularVelocity: x:" << state.localAngularVelocity.x << ", y: " << state.localAngularVelocity.y << ", z: " << state.localAngularVelocity.z << std::endl << std::endl;
+            
             // -------------------------------------------------
 
             // Send OSC
             mtx.lock();
-            sendOSCMessage(id, posx, posy, posz, rx, ry, rz, rw);
+            sendOSCMessage(id, posx, posy, posz, rx, ry, rz, rw, curState, stability);
             mtx.unlock();
             
             // Wait
-            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(33));
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(30));
         }
     }
     else {
@@ -221,17 +224,12 @@ int main(int argc, char* argv[]) {
     while (network != nullptr) {
         // Check if the network has been changed.
         const uint32_t currentUpdateId = network.getUpdateId();
-
-        std::vector<std::thread> workers;
-
         if (prevUpdateId != currentUpdateId) {
             prevUpdateId = currentUpdateId;
             std::cout << "--- Device network changed, update id: " << currentUpdateId << " ---" << std::endl;
-
+            std::vector<std::thread> workers;
             // Get all idle nodes that supports tracking task.
             const std::vector<Antilatency::DeviceNetwork::NodeHandle> trackingNodes = getIdleTrackingNodes(network, altTrackingCotaskConstructor);
-
-            
             std::cout << trackingNodes.size() << std::endl;
             for (auto trackingNode : trackingNodes) {
                 if (trackingNode != Antilatency::DeviceNetwork::NodeHandle::Null) {
@@ -241,18 +239,17 @@ int main(int argc, char* argv[]) {
                     // Tag
                     std::string tag;
                     tag = network.nodeGetStringProperty(trackingNode, "Tag");
+                    std::cout << "Start:" << tag << std::endl;
                     workers.emplace_back(getTrackingInfo, altTrackingCotask, tag, placement);
+                    //getTrackingInfo(altTrackingCotask, tag, placement);
                 }
             }
-
-            
+            for (auto& worker : workers) {
+                worker.join();
+                std::cout << "thread join" << std::endl;
+            }
         }
-
-        for (auto& worker : workers) {
-            worker.join();
-        }
-
-        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(30));
+        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(500));
     }
     
     return 0;
