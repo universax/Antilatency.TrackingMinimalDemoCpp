@@ -82,8 +82,8 @@ std::vector<Antilatency::DeviceNetwork::NodeHandle> getIdleTrackingNodes(Antilat
 
 void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCotask, std::string tag, Antilatency::Math::floatP3Q placement) {
     if (altTrackingCotask != nullptr) {
-        while (altTrackingCotask != nullptr)
-        {
+        //while (altTrackingCotask != nullptr)
+        //{
             if (altTrackingCotask.isTaskFinished()) {
                 std::cout << "Tracking task finished: " << tag << std::endl;
                 return;
@@ -121,13 +121,13 @@ void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCot
             // -------------------------------------------------
 
             // Send OSC
-            mtx.lock();
+            //mtx.lock();
             sendOSCMessage(id, posx, posy, posz, rx, ry, rz, rw, curState, stability);
-            mtx.unlock();
+            //mtx.unlock();
             
             // Wait
-            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(30));
-        }
+            //std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(30));
+        //}
     }
     else {
         std::cout << "Failed to start tracking task on node" << std::endl;
@@ -135,7 +135,14 @@ void getTrackingInfo(Antilatency::Alt::Tracking::ITrackingCotask& altTrackingCot
 }
 
 
-
+Antilatency::Alt::Tracking::ITrackingCotask createCotask(Antilatency::Alt::Tracking::ITrackingCotaskConstructor altTrackingCotaskConstructor,
+    Antilatency::DeviceNetwork::INetwork network,
+    Antilatency::DeviceNetwork::NodeHandle trackingNode,
+    Antilatency::Alt::Environment::IEnvironment environment
+    ) {
+    Antilatency::Alt::Tracking::ITrackingCotask altTrackingCotask = altTrackingCotaskConstructor.startTask(network, trackingNode, environment);
+    return altTrackingCotask;
+}
 
 
 
@@ -216,7 +223,6 @@ int main(int argc, char* argv[]) {
     }
 
     
-
     // Each time the device network is changed due to connection or disconnection of a device that matches the device filter of the network,
     // or start or stop of a task on any network device, the network update id is incremented by 1. 
     uint32_t prevUpdateId = 0;
@@ -231,25 +237,58 @@ int main(int argc, char* argv[]) {
             // Get all idle nodes that supports tracking task.
             const std::vector<Antilatency::DeviceNetwork::NodeHandle> trackingNodes = getIdleTrackingNodes(network, altTrackingCotaskConstructor);
             std::cout << trackingNodes.size() << std::endl;
+            if (trackingNodes.size() < 4)
+            {
+                continue;
+            }
+
+            // stock
+            std::vector< Antilatency::Alt::Tracking::ITrackingCotask > cotasks;
+            std::vector< std::string > tags;
             for (auto trackingNode : trackingNodes) {
                 if (trackingNode != Antilatency::DeviceNetwork::NodeHandle::Null) {
                     // Start tracking task on node.
                     Antilatency::Alt::Tracking::ITrackingCotask altTrackingCotask = altTrackingCotaskConstructor.startTask(network, trackingNode, environment);
-                    
+                    cotasks.push_back(altTrackingCotask);
+
                     // Tag
                     std::string tag;
                     tag = network.nodeGetStringProperty(trackingNode, "Tag");
+                    tags.push_back(tag);
                     std::cout << "Start:" << tag << std::endl;
-                    workers.emplace_back(getTrackingInfo, altTrackingCotask, tag, placement);
+
+                    // Run worker
+                    //workers.emplace_back(getTrackingInfo, altTrackingCotask, tag, placement);
                     //getTrackingInfo(altTrackingCotask, tag, placement);
+
+                    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1));
                 }
             }
-            for (auto& worker : workers) {
-                worker.join();
-                std::cout << "thread join" << std::endl;
+            //for (auto& worker : workers) {
+            //    worker.join();
+            //    std::cout << "thread join" << std::endl;
+            //}
+
+            int sleepcount = 0;
+            while (sleepcount == 0) {
+                for (int i = 0; i < cotasks.size(); i++)
+                {
+                    Antilatency::Alt::Tracking::ITrackingCotask cotask = cotasks[i];
+                    if (cotask.isTaskFinished())
+                    {
+                        sleepcount += 1;
+                        //std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
+                        //cotasks[i] = createCotask(altTrackingCotaskConstructor, network, trackingNodes[i], environment);
+                        std::cout << "Re-Create cotask: " << tags[i] << std::endl;
+                    }
+                    else {
+                        getTrackingInfo(cotask, tags[i], placement);
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1));
             }
         }
-        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(500));
+        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
     }
     
     return 0;
